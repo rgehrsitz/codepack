@@ -3,29 +3,28 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 // Activation function for the extension
-export function activate (context: vscode.ExtensionContext) {
-	let disposable = vscode.commands.registerCommand('codepack.extractProject', async () => {
-		const rootPath = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
-		if (!rootPath) {
-			vscode.window.showErrorMessage('No project open');
-			return;
-		}
+export function activate(context: vscode.ExtensionContext) {
+    let disposable = vscode.commands.registerCommand('codepack.extractProject', async () => {
+        const selectedFiles = vscode.window.activeTextEditor?.document.uri.fsPath || vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+if (!selectedFiles) {
+	vscode.window.showErrorMessage('No files or project open');
+	return;
+}
 
-		try {
-			const options = await getUserOptions();
-			const projectStructure = await extractProjectStructure(rootPath, options);
-			const output = JSON.stringify(projectStructure, null, 2);
+try {
+	const projectStructure = await extractProjectStructure(selectedFiles);
+	const output = JSON.stringify(projectStructure, null, 2);
 
-			vscode.workspace.openTextDocument({ content: output, language: 'json' }).then(doc => {
-				vscode.window.showTextDocument(doc);
-			});
-		} catch (error) {
-			const errorMessage = `Error extracting project structure: ${(error as Error).message}`;
-			vscode.window.showErrorMessage(errorMessage);
-		}
+	vscode.workspace.openTextDocument({ content: output, language: 'json' }).then(doc => {
+		vscode.window.showTextDocument(doc);
 	});
+} catch (error) {
+	const errorMessage = (error as Error).message;
+	vscode.window.showErrorMessage(`Error extracting project structure: ${errorMessage}`);
+}
+    });
 
-	context.subscriptions.push(disposable);
+    context.subscriptions.push(disposable);
 }
 
 // Function to deactivate the extension
@@ -50,42 +49,42 @@ interface UserOptions {
 
 // Interface for file data
 interface FileData {
-	name: string;
-	type: 'file' | 'directory' | 'binary';
-	content?: string;
-	children?: FileData[];
+    name: string;
+    type: 'file' | 'directory';
+    content?: string;
+    children?: FileData[];
 }
 
 // Function to extract project structure
-async function extractProjectStructure (dir: string, options: UserOptions): Promise<FileData[]> {
-	let results: FileData[] = [];
+// Function to extract project structure
+async function extractProjectStructure(selectedPath: string): Promise<FileData[]> {
+    let results: FileData[] = [];
 
-	try {
-		const items = await fs.promises.readdir(dir, { withFileTypes: true });
+    try {
+        const stat = await fs.promises.stat(selectedPath);
+        if (stat.isDirectory()) {
+            const items = await fs.promises.readdir(selectedPath, { withFileTypes: true });
+            for (const item of items) {
+                const fullPath = path.join(selectedPath, item.name);
+                const childStat = await fs.promises.stat(fullPath);
+                if (childStat.isDirectory()) {
+                    const children = await extractProjectStructure(fullPath);
+                    results.push({ name: item.name, type: 'directory', children });
+                } else {
+                    const content = await fs.promises.readFile(fullPath, 'utf8');
+                    results.push({ name: item.name, type: 'file', content });
+                }
+            }
+        } else {
+            const content = await fs.promises.readFile(selectedPath, 'utf8');
+            results.push({ name: path.basename(selectedPath), type: 'file', content });
+        }
+    } catch (error) {
+        console.error(`Error reading directory or file ${selectedPath}: ${error}`);
+        throw error;
+    }
 
-		for (const item of items) {
-			if (item.isDirectory()) {
-				const children = await extractProjectStructure(path.join(dir, item.name), options);
-				results.push({ name: item.name, type: 'directory', children });
-			} else {
-				let type: 'file' | 'binary' = 'file';
-				let content: string | undefined = undefined;
-
-				if (shouldBeIncluded(item.name, options)) {
-					content = await fs.promises.readFile(path.join(dir, item.name), 'utf8');
-				} else if (isBinaryFile(item.name)) {
-					type = 'binary';
-				}
-
-				results.push({ name: item.name, type, content });
-			}
-		}
-	} catch (error) {
-		console.error(`Error reading directory ${dir}: ${error}`);
-		throw error;
-	}
-
-	return results;
+    return results;
 }
 
 // Function to check if a file should be included
